@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Flipbook with Three.js and PDF.js</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f0f0f0;
+        }
+        canvas {
+            display: block;
+        }
+        .controls {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            display: flex;
+            gap: 10px;
+        }
+        .controls button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            background-color: #333;
+            color: #fff;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s ease;
+        }
+        .controls button:hover {
+            background-color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <button id="prevPage">Previous Page</button>
+        <button id="nextPage">Next Page</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js" integrity="sha512-Z8CqofpIcnJN80feS2uccz+pXWgZzeKxDsDNMD/dJ6997/LSRY+W4NmEt9acwR+Gt9OHN0kkI1CTianCwoqcjQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+        const pdfUrl = 'http://localhost:3000/pdf';
+        const pdfScale = 2.0;  // Increased scale for better quality
+        const flipDuration = 1000; // Duration of the flip animation in milliseconds
+
+        let pdfDoc = null;
+        let currentPage = 1;
+        let pages = [];
+        let isFlipping = false;
+        let flipStartTime = null;
+        let flipDirection = 1; // 1 for next, -1 for previous
+
+        // Initialize Three.js
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Set up camera
+        camera.position.z = 5;
+
+        // Handle window resize
+        window.addEventListener('resize', onWindowResize, false);
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Load PDF
+        function loadPDF() {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js';
+            pdfjsLib.getDocument(pdfUrl).promise.then(pdf => {
+                pdfDoc = pdf;
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    renderPage(pageNum);
+                }
+            });
+        }
+
+        function renderPage(pageNum) {
+            pdfDoc.getPage(pageNum).then(page => {
+                const viewport = page.getViewport({ scale: pdfScale });
+                const canvas = document.createElement('canvas');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                const context = canvas.getContext('2d');
+                const renderContext = {
+                    canvasContext: context,
+                    viewport: viewport
+                };                                                                                           
+
+                page.render(renderContext).promise.then(() => {
+                    const texture = new THREE.CanvasTexture(canvas);
+                    texture.magFilter = THREE.LinearFilter;
+                    texture.minFilter = THREE.LinearFilter;
+                    texture.generateMipmaps = false;
+
+                    const geometry = new THREE.PlaneGeometry(viewport.width / 200, viewport.height / 200);
+                    const material = new THREE.MeshBasicMaterial({ map: texture });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.position.z = -pageNum * 0.1;
+                    mesh.rotation.y = Math.PI; // Start with pages flipped to the back
+
+                    pages.push(mesh);
+                    scene.add(mesh);
+
+                    if (pageNum === currentPage) {
+                        mesh.rotation.y = 0; // Show the first page
+                    }
+                });
+            });
+        }
+
+        function flipPage() {
+            if (isFlipping) return;
+            isFlipping = true;
+            flipStartTime = Date.now();
+
+            const currentMesh = pages[currentPage - 1];
+            const nextPageNum = currentPage + flipDirection;
+
+            if (nextPageNum < 1 || nextPageNum > pdfDoc.numPages) {
+                isFlipping = false;
+                return;
+            }
+
+            const nextMesh = pages[nextPageNum - 1];
+            nextMesh.rotation.y = flipDirection === 1 ? Math.PI : 0;
+
+            function animateFlip() {
+                const currentTime = Date.now();
+                const elapsedTime = currentTime - flipStartTime;
+                const progress = Math.min(1, elapsedTime / flipDuration);
+
+                if (flipDirection === 1) {
+                    currentMesh.rotation.y = THREE.MathUtils.lerp(0, Math.PI, progress);
+                    nextMesh.rotation.y = THREE.MathUtils.lerp(Math.PI, 0, progress);
+                } else {
+                    currentMesh.rotation.y = THREE.MathUtils.lerp(Math.PI, 0, progress);
+                    nextMesh.rotation.y = THREE.MathUtils.lerp(0, Math.PI, progress);
+                }
+
+                if (progress < 1) {
+                    requestAnimationFrame(animateFlip);
+                } else {
+                    currentPage = nextPageNum;
+                    isFlipping = false;
+                }
+            }
+
+            requestAnimationFrame(animateFlip);
+        }
+
+        document.getElementById('prevPage').addEventListener('click', () => {
+            if (!isFlipping) {
+                flipDirection = -1;
+                flipPage();
+            }
+        });
+
+        document.getElementById('nextPage').addEventListener('click', () => {
+            if (!isFlipping) {
+                flipDirection = 1;
+                flipPage();
+            }
+        });
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        loadPDF();
+    </script>
+</body>
+</html>
